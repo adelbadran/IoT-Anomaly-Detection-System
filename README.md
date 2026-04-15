@@ -4,10 +4,7 @@ Brief project for detecting and exploring anomalies in industrial compressor IoT
 
 ## Project Overview
 
-This repository is organized into two phases:
-
-- **Phase 0 - About Dataset**: dataset understanding, schema check, and data quality orientation.
-- **Phase 1 - Analysis**: exploratory analysis notebook and Streamlit dashboard for anomaly investigation.
+This repository currently documents **Phase 1 - Analysis**: exploratory analysis notebook and Streamlit dashboard for anomaly investigation.
 
 ## Dataset Link
 
@@ -17,10 +14,9 @@ This repository is organized into two phases:
 
 ```text
 IoT-Anomaly-Detection-System/
-|-- Phase 0 - About Dataset/
-|   `-- Dataset/
-|       `-- Metro.csv
 |-- Phase 1 - Analysis/
+|   |-- .streamlit/
+|   |   `-- config.toml
 |   |-- Dashboard/
 |   |   `-- app.py
 |   |-- NoteBook/
@@ -29,14 +25,6 @@ IoT-Anomaly-Detection-System/
 |   `-- README.md
 `-- README.md
 ```
-
-## Phase 0 (Dataset)
-
-- Input file: `Phase 0 - About Dataset/Dataset/Metro.csv`
-- Purpose:
-  - understand available sensors and timestamps
-  - check basic quality issues (missing values, duplicates, continuity)
-  - prepare clean context for analysis
 
 ## Phase 1 (Analysis + Dashboard)
 
@@ -56,3 +44,5 @@ streamlit run "Dashboard\app.py"
 ```
 
 Open `http://localhost:8501`.
+
+Upload note: `.streamlit/config.toml` sets `maxUploadSize = 300`, so files larger than 200 MB (for example `Metro.csv` at ~208 MB) can be uploaded.

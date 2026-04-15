@@ -53,6 +53,8 @@ This project helps operations and analytics teams identify those patterns early.
 
 ```text
 Phase 1 - Analysis/
+|-- .streamlit/
+|   `-- config.toml              # Streamlit server settings (upload limit)
 |-- Dashboard/
 |   `-- app.py                   # Streamlit monitoring and anomaly exploration dashboard
 |-- NoteBook/
@@ -158,6 +160,11 @@ python -m streamlit run "Dashboard\app.py"
 
 ### 3) Open app
 - `http://localhost:8501`
+
+### Upload size configuration
+- Project includes `.streamlit/config.toml` with:
+  - `maxUploadSize = 300`
+- This allows uploading the Metro dataset (~208 MB), which is above Streamlit's default 200 MB.
 
 ## Deployment
 
