@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import io
 import os
-from datetime import timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -12,197 +12,59 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 
-DEFAULT_CSV_PATH = os.getenv("METRO_CSV_PATH", "")
-LOCAL_FALLBACK_CSV_PATH = (
-    r"D:\Courses\DEPI R4 - Microsoft ML\Graduation Project\Phase 0 - About Dataset\Dataset\Metro.csv"
-)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CSV_PATH = os.getenv("ALG1_CSV_PATH", str(REPO_ROOT / "alg1_lab_dataset.csv"))
 
-NOTEBOOK_SENSORS = ["tp2", "tp3", "h1", "oil_temperature", "motor_current"]
-
-COLUMN_DEFINITIONS = {
-    "tp2": "Pressure sensor reading at stage TP2.",
-    "tp3": "Pressure sensor reading at stage TP3.",
-    "h1": "Humidity-related sensor reading H1.",
-    "oil_temperature": "Main oil temperature of the compressor system.",
-    "motor_current": "Electrical current drawn by compressor motor.",
-    "reservoirs": "Reservoir/load indicator from source data.",
-    "comp": "Compressor operating state code.",
-    "pressure_delta": "Pressure difference between TP3 and TP2.",
-    "pressure_change": "Step-to-step change in TP3 pressure.",
-    "power_indicator": "Proxy power indicator (motor_current x reservoirs).",
-    "oil_temp_rolling": "Smoothed oil temperature (rolling mean window=60).",
-    "current_per_pressure": "Motor current normalized by TP2 pressure.",
-    "hour": "Hour of day extracted from timestamp.",
-    "day_of_week": "Day index extracted from timestamp (0=Monday).",
+SENSOR_COLUMNS = ["Temp_C", "Humidity_pct", "Gas_AQI", "Light_Lux", "Motion_Detected"]
+SCENARIO_NAMES = {
+    1: "Normal Operation",
+    2: "Occupied Laboratory",
+    3: "Hazard Development",
+    4: "Security Breach",
 }
-
-THEME = {
-    "primary": "#ff4b4b",
-    "background": st.get_option("theme.backgroundColor") or "#ffffff",
-    "secondary_bg": st.get_option("theme.secondaryBackgroundColor") or "#f0f2f6",
-    "text": st.get_option("theme.textColor") or "#262730",
+SCENARIO_COLORS = {
+    "Normal Operation": "#2f7d5c",
+    "Occupied Laboratory": "#3d6fb6",
+    "Hazard Development": "#c27a18",
+    "Security Breach": "#b33a3a",
 }
-
-def blend(hex_a: str, hex_b: str, ratio: float) -> str:
-    ratio = max(0.0, min(1.0, ratio))
-    a = hex_a.lstrip("#")
-    b = hex_b.lstrip("#")
-    ar, ag, ab = int(a[0:2], 16), int(a[2:4], 16), int(a[4:6], 16)
-    br, bg, bb = int(b[0:2], 16), int(b[2:4], 16), int(b[4:6], 16)
-    rr = int(ar * (1 - ratio) + br * ratio)
-    rg = int(ag * (1 - ratio) + bg * ratio)
-    rb = int(ab * (1 - ratio) + bb * ratio)
-    return f"#{rr:02x}{rg:02x}{rb:02x}"
-
-
-BRAND = {
-    "primary": THEME["primary"],
-    "secondary": blend(THEME["primary"], THEME["text"], 0.25),
-    "accent": blend(THEME["primary"], "#ffffff", 0.35),
-    "ink": THEME["text"],
-    "muted": blend(THEME["text"], THEME["background"], 0.45),
-    "grid": blend(THEME["text"], THEME["background"], 0.82),
-    "axis": blend(THEME["text"], THEME["background"], 0.70),
-    "bg": THEME["background"],
-    "surface": THEME["secondary_bg"],
+ACTION_BY_SCENARIO = {
+    1: "Monitor",
+    2: "OptimizeVentilation",
+    3: "VentilateAndAlert",
+    4: "LockdownAndNotify",
 }
-
-UNIFIED_DISCRETE_COLORS = [
-    BRAND["secondary"],
-    BRAND["accent"],
-    blend(BRAND["primary"], "#ffffff", 0.25),
-    blend(BRAND["primary"], "#ffffff", 0.40),
-    blend(BRAND["primary"], "#ffffff", 0.55),
-]
-
-UNIFIED_SEQUENTIAL_SCALE = [
-    [0.0, blend(BRAND["primary"], "#ffffff", 0.90)],
-    [0.25, blend(BRAND["primary"], "#ffffff", 0.70)],
-    [0.5, blend(BRAND["primary"], "#ffffff", 0.50)],
-    [0.75, blend(BRAND["primary"], "#ffffff", 0.25)],
-    [1.0, BRAND["primary"]],
-]
-
-UNIFIED_DIVERGING_SCALE = [
-    [0.0, blend(BRAND["primary"], "#0f172a", 0.35)],
-    [0.5, blend(BRAND["bg"], "#ffffff", 0.15)],
-    [1.0, BRAND["primary"]],
-]
-
-px.defaults.template = "plotly_white"
-px.defaults.color_discrete_sequence = UNIFIED_DISCRETE_COLORS
 
 
 st.set_page_config(
-    page_title="Metro Compressor Dashboard",
+    page_title="ALG-1 Lab Guardian",
+    page_icon="ALG",
     layout="wide",
 )
 
+px.defaults.template = "plotly_white"
+
 st.markdown(
-    f"""
+    """
     <style>
-    .stApp {{
-        background: {BRAND["bg"]};
-    }}
-    .block-container {{padding-top: 1.1rem; padding-bottom: 1rem; max-width: 1400px;}}
-    .hero {{
-        background: linear-gradient(135deg, {BRAND["primary"]} 0%, {BRAND["secondary"]} 100%);
-        color: #ffffff;
-        border-radius: 16px;
-        padding: 1.1rem 1.2rem;
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
-        margin-bottom: 0.9rem;
-    }}
-    .hero h1 {{
-        margin: 0;
-        font-size: 1.65rem;
-        font-weight: 700;
-        letter-spacing: 0.2px;
-    }}
-    .hero p {{
-        margin: 0.3rem 0 0;
-        font-size: 0.98rem;
-        color: rgba(255, 255, 255, 0.92);
-    }}
-    div[data-testid="stMetric"] {{
-        border: 1px solid {BRAND["grid"]};
-        border-left: 4px solid {BRAND["primary"]};
-        background: {BRAND["surface"]};
-        border-radius: 12px;
-        padding: 0.6rem 0.85rem;
-        margin-bottom: 0.65rem;
-    }}
-    div[data-testid="stHorizontalBlock"] {{
-        gap: 1rem;
-    }}
-    div[data-testid="stContainer"] {{
-        margin-bottom: 0.75rem;
-    }}
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 10px;
-    }}
-    .stTabs [data-baseweb="tab"] {{
+    .block-container {
+        padding-top: 1.4rem;
+        padding-bottom: 2.2rem;
+    }
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(49, 51, 63, 0.16);
         border-radius: 8px;
-        border: 1px solid {BRAND["grid"]};
-        background: {BRAND["surface"]};
-        color: {BRAND["ink"]};
-        padding-left: 14px;
-        padding-right: 14px;
-    }}
-    .obs-box {{
-        border: 1px solid {BRAND["grid"]};
-        background: {BRAND["surface"]};
-        border-radius: 12px;
-        padding: 0.8rem 1rem;
-        margin-top: 0.6rem;
-        margin-bottom: 0.8rem;
-    }}
-    .obs-box p {{
-        margin: 0.2rem 0;
-        color: {BRAND["ink"]};
-        font-size: 0.95rem;
-    }}
+        padding: 0.85rem 0.95rem;
+        background: rgba(250, 250, 250, 0.72);
+    }
+    .small-note {
+        color: rgba(49, 51, 63, 0.72);
+        font-size: 0.9rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-with st.expander("How To Read This Dashboard", expanded=False):
-    st.markdown(
-        """
-        - Use **Filters** in the sidebar to focus on a period or compressor state.
-        - In **Correlations**, values near `+1` move together, near `-1` move opposite.
-        - In **Sensor Trends**, compare raw signal and smoothed trend to spot drift/anomalies.
-        - In **Metric Explorer**, pick any metric to see definition, stats, spread, and timeline.
-        """
-    )
-
-
-def style_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
-    fig.update_layout(
-        paper_bgcolor=BRAND["surface"],
-        plot_bgcolor=BRAND["bg"],
-        font={"family": "Segoe UI, sans-serif", "color": BRAND["ink"], "size": 12},
-        margin={"l": 16, "r": 150, "t": 58, "b": 16},
-        legend={
-            "orientation": "v",
-            "y": 1.0,
-            "yanchor": "top",
-            "x": 1.02,
-            "xanchor": "left",
-            "title": None,
-            "bgcolor": BRAND["surface"],
-            "bordercolor": BRAND["grid"],
-            "borderwidth": 1,
-        },
-        hovermode="x unified",
-        title={"x": 0.01, "xanchor": "left", "font": {"size": 18, "color": BRAND["ink"]}},
-    )
-    fig.update_xaxes(showgrid=True, gridcolor=BRAND["grid"], showline=True, linecolor=BRAND["axis"])
-    fig.update_yaxes(showgrid=True, gridcolor=BRAND["grid"], showline=True, linecolor=BRAND["axis"])
-    if height is not None:
-        fig.update_layout(height=height)
-    return fig
 
 
 @st.cache_data(show_spinner=False)
@@ -215,612 +77,463 @@ def load_data_from_bytes(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(file_bytes))
 
 
+def normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    aliases = {
+        "timestamp": "Timestamp",
+        "temp_c": "Temp_C",
+        "humidity_pct": "Humidity_pct",
+        "gas_aqi": "Gas_AQI",
+        "light_lux": "Light_Lux",
+        "motion_detected": "Motion_Detected",
+        "true_scenario": "True_Scenario",
+    }
+    renamed = {}
+    for column in df.columns:
+        key = str(column).strip().lower()
+        if key in aliases:
+            renamed[column] = aliases[key]
+    return df.rename(columns=renamed)
+
+
 @st.cache_data(show_spinner=False)
-def prepare_data(raw_df: pd.DataFrame) -> dict:
-    df = raw_df.copy()
-    duplicate_count = int(df.duplicated().sum())
-    nulls = df.isnull().sum().sort_values(ascending=False)
+def prepare_data(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_column_names(raw_df.copy())
+    required = {"Timestamp", "Temp_C", "Humidity_pct", "Gas_AQI", "Light_Lux", "Motion_Detected", "True_Scenario"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"Missing required ALG-1 columns: {missing}")
 
-    unnamed_cols = [col for col in df.columns if str(col).lower().startswith("unnamed")]
-    if unnamed_cols:
-        df = df.drop(columns=unnamed_cols)
+    df = df[list(required)].copy()
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    df = df.dropna(subset=["Timestamp"]).sort_values("Timestamp").reset_index(drop=True)
 
-    df.columns = [str(col).lower().replace(" ", "_").strip() for col in df.columns]
+    numeric_columns = ["Temp_C", "Humidity_pct", "Gas_AQI", "Light_Lux", "Motion_Detected", "True_Scenario"]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    if "timestamp" not in df.columns:
-        raise ValueError("Column 'timestamp' is required to build this dashboard.")
+    df = df.dropna(subset=numeric_columns).reset_index(drop=True)
+    df["Motion_Detected"] = df["Motion_Detected"].astype(int)
+    df["True_Scenario"] = df["True_Scenario"].astype(int)
+    df["Scenario_Name"] = df["True_Scenario"].map(SCENARIO_NAMES).fillna("Unknown")
+    df["Recommended_Action"] = df["True_Scenario"].map(ACTION_BY_SCENARIO).fillna("InspectLab")
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-    df = df.set_index("timestamp")
+    df["Date"] = df["Timestamp"].dt.date.astype(str)
+    df["Hour"] = df["Timestamp"].dt.hour + df["Timestamp"].dt.minute / 60.0
+    df["Day_Name"] = df["Timestamp"].dt.day_name()
+    df["Is_Night"] = ((df["Hour"] < 6.0) | (df["Hour"] > 22.0)).astype(int)
+    df["Is_Work_Window"] = ((df["Hour"] >= 9.0) & (df["Hour"] <= 16.5)).astype(int)
 
-    for col in df.columns:
-        if df[col].dtype == "object":
-            parsed = pd.to_numeric(df[col], errors="coerce")
-            if parsed.notna().mean() > 0.9:
-                df[col] = parsed
+    df["Gas_Slope_30m"] = df["Gas_AQI"].diff(30).fillna(0.0)
+    df["Motion_5m"] = df["Motion_Detected"].rolling(5, min_periods=1).sum()
+    df["Temp_Delta_1m"] = df["Temp_C"].diff().fillna(0.0)
+    df["Gas_Delta_1m"] = df["Gas_AQI"].diff().fillna(0.0)
 
-    df["hour"] = df.index.hour
-    df["day_of_week"] = df.index.dayofweek
+    gas_pressure = np.clip((df["Gas_AQI"] - 80.0) / 120.0, 0.0, 1.0)
+    gas_trend = np.clip(df["Gas_Slope_30m"] / 25.0, 0.0, 1.0)
+    temp_pressure = np.clip((df["Temp_C"] - 30.0) / 10.0, 0.0, 1.0)
+    night_motion = df["Is_Night"] * np.clip(df["Motion_5m"] / 5.0, 0.0, 1.0)
+    df["Hazard_Risk"] = np.clip(0.55 * gas_pressure + 0.30 * gas_trend + 0.15 * temp_pressure, 0.0, 1.0)
+    df["Security_Risk"] = np.clip(night_motion, 0.0, 1.0)
+    df["Fuzzy_Risk"] = np.maximum(df["Hazard_Risk"], df["Security_Risk"])
 
-    engineered_cols: list[str] = []
+    target_action_reward = {
+        "Monitor": 0.96,
+        "OptimizeVentilation": 0.88,
+        "VentilateAndAlert": 0.82,
+        "LockdownAndNotify": 0.78,
+        "InspectLab": 0.70,
+    }
+    df["RL_Baseline_Reward"] = df["Recommended_Action"].map(target_action_reward).astype(float)
+    df.loc[df["Fuzzy_Risk"] > 0.8, "RL_Baseline_Reward"] -= 0.08
+    df["RL_Baseline_Reward"] = df["RL_Baseline_Reward"].clip(0.0, 1.0)
 
-    if {"tp2", "tp3"}.issubset(df.columns):
-        df["pressure_delta"] = df["tp3"] - df["tp2"]
-        df["pressure_change"] = df["tp3"].diff()
-        engineered_cols.extend(["pressure_delta", "pressure_change"])
+    return df
 
-    if {"motor_current", "reservoirs"}.issubset(df.columns):
-        df["power_indicator"] = df["motor_current"] * df["reservoirs"]
-        engineered_cols.append("power_indicator")
 
-    if "oil_temperature" in df.columns:
-        df["oil_temp_rolling"] = df["oil_temperature"].rolling(window=60).mean()
-        engineered_cols.append("oil_temp_rolling")
+def scenario_distribution(df: pd.DataFrame) -> pd.DataFrame:
+    counts = df["Scenario_Name"].value_counts().rename_axis("Scenario").reset_index(name="Rows")
+    counts["Ratio"] = counts["Rows"] / max(len(df), 1)
+    order = list(SCENARIO_NAMES.values())
+    counts["Scenario"] = pd.Categorical(counts["Scenario"], categories=order, ordered=True)
+    return counts.sort_values("Scenario")
 
-    if {"motor_current", "tp2"}.issubset(df.columns):
-        df["current_per_pressure"] = df["motor_current"] / (df["tp2"] + 0.1)
-        engineered_cols.append("current_per_pressure")
 
-    if engineered_cols:
-        df = df.dropna(subset=engineered_cols)
-    else:
-        df = df.dropna()
+def pca_projection(df: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, np.ndarray]:
+    x = df[columns].astype(float).to_numpy()
+    x = np.nan_to_num(x, nan=np.nanmedian(x, axis=0))
+    x = (x - x.mean(axis=0)) / np.where(x.std(axis=0) == 0, 1.0, x.std(axis=0))
+    _, singular_values, vt = np.linalg.svd(x, full_matrices=False)
+    components = vt[:2]
+    scores = x @ components.T
+    variances = singular_values**2 / max(len(x) - 1, 1)
+    explained = variances / variances.sum()
+    projected = pd.DataFrame(
+        {
+            "PC1": scores[:, 0],
+            "PC2": scores[:, 1],
+            "Scenario_Name": df["Scenario_Name"].to_numpy(),
+            "Timestamp": df["Timestamp"].astype(str).to_numpy(),
+        }
+    )
+    return projected, explained[:2]
 
-    gap_series = df.index.to_series().diff().dt.total_seconds().fillna(0)
-    gap_series.name = "gap_seconds"
-    top_gaps = gap_series.sort_values(ascending=False).head(5)
-    positive_gaps = gap_series[gap_series > 0]
-    median_step_seconds = float(positive_gaps.median()) if not positive_gaps.empty else 10.0
 
-    return {
-        "raw_rows": len(raw_df),
-        "duplicates": duplicate_count,
-        "nulls": nulls,
-        "df": df,
-        "gap_series": gap_series,
-        "top_gaps": top_gaps,
-        "median_step_seconds": median_step_seconds,
+def strongest_edges(corr: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
+    records = []
+    cols = corr.columns.tolist()
+    for i, source in enumerate(cols):
+        for target in cols[i + 1 :]:
+            value = float(corr.loc[source, target])
+            records.append(
+                {
+                    "Source": source,
+                    "Target": target,
+                    "Weight": abs(value),
+                    "Correlation": value,
+                    "Relation_Type": "positive" if value >= 0 else "negative",
+                }
+            )
+    return pd.DataFrame(records).sort_values("Weight", ascending=False).head(limit)
+
+
+def feature_graph_figure(edges: pd.DataFrame, columns: list[str]) -> go.Figure:
+    angles = np.linspace(0, 2 * np.pi, len(columns), endpoint=False)
+    positions = {
+        column: (float(np.cos(angle)), float(np.sin(angle)))
+        for column, angle in zip(columns, angles, strict=False)
     }
 
+    fig = go.Figure()
+    for _, row in edges.iterrows():
+        x0, y0 = positions[row["Source"]]
+        x1, y1 = positions[row["Target"]]
+        line_color = "#2f7d5c" if row["Correlation"] >= 0 else "#b33a3a"
+        fig.add_trace(
+            go.Scatter(
+                x=[x0, x1],
+                y=[y0, y1],
+                mode="lines",
+                line=dict(width=1.5 + 5.5 * row["Weight"], color=line_color),
+                hovertemplate=(
+                    f"{row['Source']} -> {row['Target']}<br>"
+                    f"corr={row['Correlation']:.3f}<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
 
-def format_seconds(value: float) -> str:
-    if value < 60:
-        return f"{value:.0f}s"
-    if value < 3600:
-        return f"{value / 60:.1f}m"
-    return f"{value / 3600:.1f}h"
+    fig.add_trace(
+        go.Scatter(
+            x=[positions[column][0] for column in columns],
+            y=[positions[column][1] for column in columns],
+            mode="markers+text",
+            marker=dict(size=28, color="#3d6fb6", line=dict(width=1, color="#1f2937")),
+            text=columns,
+            textposition="bottom center",
+            hovertemplate="%{text}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        height=430,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Sensor-Modality Graph",
+        xaxis=dict(visible=False, range=[-1.35, 1.35]),
+        yaxis=dict(visible=False, range=[-1.25, 1.35]),
+        plot_bgcolor="white",
+    )
+    return fig
 
 
-def pretty_name(column: str) -> str:
-    return column.replace("_", " ").title()
+def line_chart(df: pd.DataFrame, selected_sensors: list[str], rolling_window: int) -> go.Figure:
+    fig = make_subplots(
+        rows=len(selected_sensors),
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=selected_sensors,
+    )
+    for row_index, sensor in enumerate(selected_sensors, start=1):
+        smoothed = df[sensor].rolling(rolling_window, min_periods=1).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=df["Timestamp"],
+                y=df[sensor],
+                mode="lines",
+                name=f"{sensor} raw",
+                line=dict(width=1, color="#8a8f98"),
+                opacity=0.45,
+            ),
+            row=row_index,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df["Timestamp"],
+                y=smoothed,
+                mode="lines",
+                name=f"{sensor} SMA",
+                line=dict(width=2.4, color="#b33a3a"),
+            ),
+            row=row_index,
+            col=1,
+        )
+    fig.update_layout(
+        height=max(360, 245 * len(selected_sensors)),
+        margin=dict(l=20, r=20, t=50, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+    )
+    return fig
 
 
-def column_description(column: str) -> str:
-    return COLUMN_DEFINITIONS.get(column, "No custom description. Metric available from source dataset.")
-
-
-def render_observations(title: str, observations: list[str]) -> None:
-    body = "".join(f"<p>- {item}</p>" for item in observations if item)
-    st.markdown(f"#### {title}", unsafe_allow_html=False)
-    st.markdown(f"<div class='obs-box'>{body}</div>", unsafe_allow_html=True)
-
-
-def strongest_correlation(corr_matrix: pd.DataFrame) -> tuple[str, float] | None:
-    if corr_matrix.empty or len(corr_matrix.columns) < 2:
-        return None
-    upper = corr_matrix.where(~pd.DataFrame(
-        [[i >= j for j in range(len(corr_matrix.columns))] for i in range(len(corr_matrix.columns))],
-        index=corr_matrix.index,
-        columns=corr_matrix.columns,
-    ))
-    stacked = upper.stack()
-    if stacked.empty:
-        return None
-    pair = stacked.abs().idxmax()
-    value = stacked.loc[pair]
-    return f"{pair[0]} <-> {pair[1]}", float(value)
-
-
-st.markdown(
-    """
-    <div class="hero">
-      <h1>Metro Compressor Monitoring Dashboard</h1>
-      <p>Professional analytics view from your notebook: data quality, sensor behavior, correlations, and compressor operations.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.title("Adaptive Lab Guardian ALG-1")
+st.caption("University laboratory monitoring dataset for Edge-AI anomaly intelligence.")
 
 with st.sidebar:
-    st.header("Data Source")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    path_input = st.text_input("Or CSV path", value=DEFAULT_CSV_PATH)
-    st.caption("For deployment, upload a CSV file or set `METRO_CSV_PATH` in environment variables.")
+    st.header("Data")
+    uploaded_file = st.file_uploader("CSV file", type=["csv"])
+    path_input = st.text_input("CSV path", value=DEFAULT_CSV_PATH)
 
-raw_df: pd.DataFrame
-source_label: str
 try:
     if uploaded_file is not None:
         raw_df = load_data_from_bytes(uploaded_file.getvalue())
-        source_label = f"Uploaded file: {uploaded_file.name}"
+        source_label = uploaded_file.name
     elif path_input and Path(path_input).exists():
         raw_df = load_data_from_path(path_input)
-        source_label = f"Local path: {path_input}"
-    elif Path(LOCAL_FALLBACK_CSV_PATH).exists():
-        raw_df = load_data_from_path(LOCAL_FALLBACK_CSV_PATH)
-        source_label = f"Local fallback path: {LOCAL_FALLBACK_CSV_PATH}"
+        source_label = path_input
     else:
-        st.info("Upload a CSV file or set a valid local path in the sidebar.")
+        st.info("Provide `alg1_lab_dataset.csv` in the sidebar.")
         st.stop()
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Unable to load dataset: {exc}")
-    st.stop()
-
-prepared = prepare_data(raw_df)
-df = prepared["df"].copy()
-
-if df.empty:
-    st.warning("No rows remain after cleaning and feature engineering.")
+    df = prepare_data(raw_df)
+except Exception as exc:
+    st.error(f"Unable to load ALG-1 dataset: {exc}")
     st.stop()
 
 with st.sidebar:
     st.caption(source_label)
-    st.header("Filters")
-    min_dt = df.index.min().to_pydatetime()
-    max_dt = df.index.max().to_pydatetime()
-    total_span = max_dt - min_dt
-    base_seconds = max(1, int(prepared["median_step_seconds"]))
+    scenario_options = list(SCENARIO_NAMES.values())
+    selected_scenarios = st.multiselect("Scenarios", scenario_options, default=scenario_options)
+    min_ts = df["Timestamp"].min().to_pydatetime()
+    max_ts = df["Timestamp"].max().to_pydatetime()
+    selected_range = st.slider("Time window", min_ts, max_ts, (min_ts, max_ts), format="MM/DD HH:mm")
+    rolling_window = st.slider("Trend SMA window", 5, 120, 20, 5)
 
-    if total_span > timedelta(days=365):
-        slider_step = timedelta(days=7)
-    elif total_span > timedelta(days=90):
-        slider_step = timedelta(days=1)
-    elif total_span > timedelta(days=14):
-        slider_step = timedelta(hours=1)
-    elif total_span > timedelta(days=2):
-        slider_step = timedelta(minutes=5)
-    else:
-        slider_step = timedelta(seconds=base_seconds)
-
-    selected_range = st.slider(
-        "Time range",
-        min_value=min_dt,
-        max_value=max_dt,
-        value=(min_dt, max_dt),
-        format="YYYY-MM-DD HH:mm:ss",
-        step=slider_step,
-    )
-    st.caption(f"Time step: {slider_step}")
-
-start_time, end_time = selected_range
-if start_time > end_time:
-    start_time, end_time = end_time, start_time
-
-df_filtered = df.loc[start_time:end_time].copy()
-
-if "comp" in df_filtered.columns:
-    with st.sidebar:
-        comp_options = sorted(df_filtered["comp"].dropna().unique().tolist())
-        selected_comp = st.multiselect("Compressor state (`comp`)", comp_options, default=comp_options)
-    if selected_comp:
-        df_filtered = df_filtered[df_filtered["comp"].isin(selected_comp)]
-    else:
-        df_filtered = df_filtered.iloc[0:0]
+df_filtered = df[
+    df["Scenario_Name"].isin(selected_scenarios)
+    & (df["Timestamp"] >= pd.Timestamp(selected_range[0]))
+    & (df["Timestamp"] <= pd.Timestamp(selected_range[1]))
+].copy()
 
 if df_filtered.empty:
     st.warning("No records match the active filters.")
     st.stop()
 
-filtered_gap_series = df_filtered.index.to_series().diff().dt.total_seconds().fillna(0)
-filtered_positive_gaps = filtered_gap_series[filtered_gap_series > 0]
-filtered_median_step_seconds = (
-    float(filtered_positive_gaps.median())
-    if not filtered_positive_gaps.empty
-    else float(prepared["median_step_seconds"])
-)
+scenario_counts = scenario_distribution(df_filtered)
 
-with st.sidebar:
-    st.header("Trend Settings")
-    total_rows = len(df_filtered)
-    default_start = max(0, total_rows - min(1000, total_rows))
-    trend_row_range = st.slider(
-        "Row range across filtered rows",
-        min_value=0,
-        max_value=max(0, total_rows - 1),
-        value=(default_start, max(0, total_rows - 1)),
-        step=1,
-    )
-    rolling_window = st.slider("Smoothing window (SMA)", 5, 120, 20, 5)
-
-time_span_seconds = (df_filtered.index.max() - df_filtered.index.min()).total_seconds()
-null_total = int(prepared["nulls"].sum())
-
-st.markdown("### Executive Snapshot")
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Records (filtered)", f"{len(df_filtered):,}")
-k2.metric("Time Span", format_seconds(time_span_seconds))
-k3.metric("Duplicates (raw)", f"{prepared['duplicates']:,}")
-k4.metric("Missing Values (raw)", f"{null_total:,}")
+k1.metric("Rows", f"{len(df_filtered):,}")
+k2.metric("Time Span", f"{df_filtered['Timestamp'].min():%b %d} - {df_filtered['Timestamp'].max():%b %d}")
+k3.metric("Mean Risk", f"{df_filtered['Fuzzy_Risk'].mean():.2f}")
+k4.metric("Scenario Coverage", f"{df_filtered['True_Scenario'].nunique()} / 4")
 
-if "oil_temperature" in df_filtered.columns:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Avg Oil Temp", f"{df_filtered['oil_temperature'].mean():.2f}")
-    c2.metric("Max Oil Temp", f"{df_filtered['oil_temperature'].max():.2f}")
-    if "motor_current" in df_filtered.columns:
-        c3.metric("Avg Motor Current", f"{df_filtered['motor_current'].mean():.2f}")
-
-top_gap_seconds = float(filtered_gap_series.max()) if not filtered_gap_series.empty else 0.0
-render_observations(
-    "Executive Observations",
-    [
-        f"Current filter contains {len(df_filtered):,} records over {format_seconds(time_span_seconds)}.",
-        f"Largest observed sampling gap is {format_seconds(top_gap_seconds)}.",
-        "Use Metric Explorer for detailed, per-metric interpretation and trend context.",
-    ],
+tab_ops, tab_sensors, tab_intel, tab_graph, tab_policy = st.tabs(
+    ["Operations", "Sensors", "Intelligence", "Feature Graph", "Policy"]
 )
-
-tab_overview, tab_corr, tab_trends, tab_ops, tab_explorer = st.tabs(
-    ["Overview", "Correlations", "Sensor Trends", "Compressor Operations", "Metric Explorer"]
-)
-
-with tab_overview:
-    st.markdown("### Data Quality Overview")
-    st.subheader("Data Quality and Continuity")
-    gaps_filtered = filtered_gap_series
-    top_gaps = gaps_filtered.sort_values(ascending=False).head(5).rename("gap_seconds").reset_index()
-    top_gaps = top_gaps.rename(columns={"index": "timestamp"})
-    chart_left, chart_right = st.columns(2, gap="medium")
-
-    with chart_left:
-        with st.container(border=True):
-            nulls_df = df_filtered.isnull().sum()
-            nulls_df = nulls_df[nulls_df > 0].sort_values(ascending=False).reset_index()
-            nulls_df.columns = ["feature", "missing_count"]
-
-            if nulls_df.empty:
-                st.success("No missing values in the selected time range.")
-            else:
-                fig_nulls = px.bar(
-                    nulls_df.head(20),
-                    x="missing_count",
-                    y="feature",
-                    orientation="h",
-                    color="missing_count",
-                    color_continuous_scale=UNIFIED_SEQUENTIAL_SCALE,
-                    labels={
-                        "missing_count": "Missing Count",
-                        "feature": "Feature",
-                    },
-                    title="Top Missing Features",
-                )
-                fig_nulls.update_layout(yaxis_title="")
-                style_figure(fig_nulls, height=420)
-                st.plotly_chart(fig_nulls, width="stretch")
-                st.caption("Higher bars indicate features with more missing values in the selected time range.")
-
-    with chart_right:
-        with st.container(border=True):
-            fig_gap = px.histogram(
-                x=gaps_filtered,
-                nbins=50,
-                log_y=True,
-                color_discrete_sequence=[BRAND["secondary"]],
-                labels={"x": "Gap Duration (seconds)", "count": "Frequency"},
-                title="Time Gap Distribution (Log Frequency)",
-            )
-            fig_gap.update_layout(xaxis_title="Gap Duration (seconds)", yaxis_title="Frequency (log)")
-            style_figure(fig_gap, height=420)
-            st.plotly_chart(fig_gap, width="stretch")
-            st.caption("Right-tail gaps suggest interruptions or irregular sampling intervals.")
-
-    st.subheader("Detail Tables")
-    table_left, table_right = st.columns(2, gap="medium")
-
-    with table_left:
-        with st.container(border=True):
-            st.caption("Top 5 Time Gaps")
-            st.dataframe(top_gaps, width="stretch", hide_index=True, height=250)
-
-    with table_right:
-        with st.container(border=True):
-            st.caption("Processed Data Preview")
-            st.dataframe(df_filtered.head(20), width="stretch", height=250)
-
-    with st.container(border=True):
-        dictionary = pd.DataFrame(
-            {
-                "column": df_filtered.columns,
-                "type": [str(df_filtered[col].dtype) for col in df_filtered.columns],
-                "description": [column_description(col) for col in df_filtered.columns],
-            }
-        )
-        st.caption("Data Dictionary")
-        st.dataframe(dictionary, width="stretch", height=260, hide_index=True)
-    missing_feature_count = int((df_filtered.isnull().sum() > 0).sum())
-    render_observations(
-        "Overview Observations",
-        [
-            f"{missing_feature_count} feature(s) currently contain missing values in the selected range.",
-            f"Top data-gap timestamp is {top_gaps['timestamp'].iloc[0] if not top_gaps.empty else 'N/A'}.",
-            "Data dictionary below helps explain each field before deeper analysis.",
-        ],
-    )
-
-with tab_corr:
-    st.markdown("### Correlation Analysis")
-    numeric_cols = df_filtered.select_dtypes(include=["number"]).columns.tolist()
-    if len(numeric_cols) < 2:
-        st.warning("Need at least 2 numeric columns to compute correlation.")
-    else:
-        corr_matrix = df_filtered[numeric_cols].corr(numeric_only=True)
-        fig_corr = px.imshow(
-            corr_matrix,
-            color_continuous_scale=UNIFIED_DIVERGING_SCALE,
-            zmin=-1,
-            zmax=1,
-            aspect="auto",
-            text_auto=".2f",
-            labels={"x": "Feature", "y": "Feature", "color": "Correlation"},
-            title="Correlation Heatmap - All Numeric Features",
-        )
-        style_figure(fig_corr, height=650)
-        st.plotly_chart(fig_corr, width="stretch")
-        st.caption("Use this map to quickly identify strongly related sensor signals.")
-        strongest = strongest_correlation(corr_matrix)
-        corr_obs = (
-            f"Strongest relationship: {strongest[0]} with correlation {strongest[1]:.2f}."
-            if strongest
-            else "Not enough data to calculate a strongest pair."
-        )
-        render_observations(
-            "Correlation Observations",
-            [
-                corr_obs,
-                "Correlations show linear relationship strength, not causation.",
-            ],
-        )
-
-    available_important = [col for col in NOTEBOOK_SENSORS if col in df_filtered.columns]
-    if len(available_important) >= 2:
-        important_corr = df_filtered[available_important].corr(numeric_only=True)
-        fig_important = px.imshow(
-            important_corr,
-            color_continuous_scale=UNIFIED_DIVERGING_SCALE,
-            zmin=-1,
-            zmax=1,
-            text_auto=".2f",
-            labels={"x": "Feature", "y": "Feature", "color": "Correlation"},
-            title="Mechanical Sensors Correlation Map",
-        )
-        style_figure(fig_important, height=520)
-        st.plotly_chart(fig_important, width="stretch")
-        st.caption("Focused view of core mechanical sensors from your notebook.")
-
-with tab_trends:
-    st.markdown("### Sensor Trend Monitoring")
-    st.subheader("Sensor Behavior with Moving Average")
-
-    candidate_sensors = [
-        col for col in (NOTEBOOK_SENSORS + ["oil_temp_rolling", "pressure_delta", "power_indicator"]) if col in df_filtered.columns
-    ]
-    candidate_sensors = list(dict.fromkeys(candidate_sensors))
-    defaults = [col for col in NOTEBOOK_SENSORS if col in candidate_sensors][:3]
-    sensor_display = {f"{pretty_name(col)} ({col})": col for col in candidate_sensors}
-    default_display = [
-        f"{pretty_name(col)} ({col})"
-        for col in (defaults if defaults else candidate_sensors[:3])
-    ]
-    selected_display = st.multiselect(
-        "Sensors to plot",
-        options=list(sensor_display.keys()),
-        default=default_display,
-    )
-    selected_sensors = [sensor_display[item] for item in selected_display]
-
-    row_start, row_end = trend_row_range
-    trend_df = df_filtered.iloc[row_start : row_end + 1]
-    if not selected_sensors:
-        st.info("Select at least one sensor to render trend charts.")
-    elif trend_df.empty:
-        st.info("Selected row range has no records.")
-    else:
-        fig = make_subplots(
-            rows=len(selected_sensors),
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.03,
-            subplot_titles=[f"{pretty_name(col)} ({col})" for col in selected_sensors],
-        )
-        for i, col in enumerate(selected_sensors, start=1):
-            fig.add_trace(
-                go.Scatter(
-                    x=trend_df.index,
-                    y=trend_df[col],
-                    mode="lines",
-                    name=f"{col} raw",
-                    line={"color": BRAND["secondary"], "width": 1.2},
-                    showlegend=(i == 1),
-                ),
-                row=i,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=trend_df.index,
-                    y=trend_df[col].rolling(window=rolling_window).mean(),
-                    mode="lines",
-                    name=f"{col} SMA({rolling_window})",
-                    line={"color": BRAND["accent"], "width": 2.2},
-                    showlegend=(i == 1),
-                ),
-                row=i,
-                col=1,
-            )
-            fig.update_yaxes(title_text=pretty_name(col), row=i, col=1)
-        fig.update_layout(title="Compressor Sensors Behavior Analysis")
-        style_figure(fig, height=max(380, 260 * len(selected_sensors)))
-        st.plotly_chart(fig, width="stretch")
-        st.caption("Dark red line is raw signal; lighter red line is smoothed trend for easier interpretation.")
-        render_observations(
-            "Trend Observations",
-            [
-                f"Trend view covers rows {row_start} to {row_end} within current time filter.",
-                f"{len(selected_sensors)} sensor(s) plotted with SMA window {rolling_window}.",
-                "Use row range to zoom on operational events without changing global time filter.",
-            ],
-        )
 
 with tab_ops:
-    st.markdown("### Operations Intelligence")
-    left, right = st.columns(2)
-
+    left, right = st.columns([1, 1], gap="large")
     with left:
-        st.subheader("Average Oil Temperature by Compressor State")
-        if {"comp", "oil_temperature"}.issubset(df_filtered.columns):
-            comp_temp = (
-                df_filtered.groupby("comp", dropna=False)["oil_temperature"]
-                .mean()
-                .reset_index(name="avg_oil_temperature")
-            )
-            fig_comp = px.bar(
-                comp_temp,
-                x="comp",
-                y="avg_oil_temperature",
-                text_auto=".2f",
-                color="avg_oil_temperature",
-                color_continuous_scale=UNIFIED_SEQUENTIAL_SCALE,
-                labels={
-                    "comp": "Compressor State",
-                    "avg_oil_temperature": "Average Oil Temperature",
-                },
-                title="Average Oil Temperature by Compressor State",
-            )
-            fig_comp.update_layout(xaxis_title="Compressor State", yaxis_title="Average Oil Temperature")
-            style_figure(fig_comp, height=430)
-            st.plotly_chart(fig_comp, width="stretch")
-            st.caption("Compares thermal behavior across compressor operating states.")
-        else:
-            st.info("Columns `comp` and `oil_temperature` are needed for this chart.")
-
+        fig_dist = px.bar(
+            scenario_counts,
+            x="Scenario",
+            y="Rows",
+            color="Scenario",
+            color_discrete_map=SCENARIO_COLORS,
+            text=scenario_counts["Ratio"].map(lambda value: f"{value:.1%}"),
+            title="Scenario Distribution",
+        )
+        fig_dist.update_layout(showlegend=False, height=420, margin=dict(l=20, r=20, t=50, b=40))
+        st.plotly_chart(fig_dist, width="stretch")
     with right:
-        st.subheader("Average State Duration")
-        if "comp" in df_filtered.columns:
-            state_change = df_filtered["comp"].ne(df_filtered["comp"].shift()).cumsum()
-            durations = (
-                df_filtered.assign(state_change=state_change)
-                .groupby(["state_change", "comp"], dropna=False)
-                .size()
-                .reset_index(name="duration_steps")
-            )
-            avg_duration = durations.groupby("comp", dropna=False)["duration_steps"].mean().reset_index()
-            avg_duration["avg_duration_seconds"] = (
-                avg_duration["duration_steps"] * filtered_median_step_seconds
-            )
-            fig_duration = px.bar(
-                avg_duration,
-                x="comp",
-                y="avg_duration_seconds",
-                text_auto=".1f",
-                color="avg_duration_seconds",
-                color_continuous_scale=UNIFIED_SEQUENTIAL_SCALE,
-                labels={
-                    "comp": "Compressor State",
-                    "avg_duration_seconds": "Average Duration (seconds)",
-                },
-                title="Average State Duration by Compressor State",
-            )
-            fig_duration.update_layout(
-                xaxis_title="Compressor State",
-                yaxis_title="Average Duration (seconds)",
-            )
-            style_figure(fig_duration, height=430)
-            st.plotly_chart(fig_duration, width="stretch")
-            st.caption(
-                "Duration is estimated from state segment length multiplied by median sampling interval."
-            )
-        else:
-            st.info("Column `comp` is needed for duration analysis.")
-    if "comp" in df_filtered.columns and {"comp", "oil_temperature"}.issubset(df_filtered.columns):
-        hottest = df_filtered.groupby("comp")["oil_temperature"].mean().sort_values(ascending=False)
-        longest = None
-        if "avg_duration" in locals():
-            longest = avg_duration.sort_values("avg_duration_seconds", ascending=False)["comp"].iloc[0]
-        render_observations(
-            "Operations Observations",
-            [
-                f"Hottest average state is `{hottest.index[0]}` at {hottest.iloc[0]:.2f} oil temperature.",
-                f"Longest average state duration is `{longest}`." if longest is not None else "State duration summary available in the right chart.",
-                "Use these two charts together to identify high-temperature and long-duration operating modes.",
-            ],
+        action_counts = (
+            df_filtered["Recommended_Action"]
+            .value_counts()
+            .rename_axis("Action")
+            .reset_index(name="Rows")
         )
+        fig_actions = px.pie(
+            action_counts,
+            names="Action",
+            values="Rows",
+            hole=0.45,
+            title="Baseline Action Mix",
+        )
+        fig_actions.update_layout(height=420, margin=dict(l=20, r=20, t=50, b=40))
+        st.plotly_chart(fig_actions, width="stretch")
 
-with tab_explorer:
-    st.markdown("### Interactive Metric Explorer")
-    st.subheader("Metric Explorer")
-    numeric_cols = df_filtered.select_dtypes(include=["number"]).columns.tolist()
-    if not numeric_cols:
-        st.info("No numeric columns available in current filters.")
+    fig_timeline = px.scatter(
+        df_filtered,
+        x="Timestamp",
+        y="True_Scenario",
+        color="Scenario_Name",
+        color_discrete_map=SCENARIO_COLORS,
+        title="Scenario Timeline",
+        height=360,
+    )
+    fig_timeline.update_traces(marker=dict(size=4, opacity=0.75))
+    fig_timeline.update_yaxes(tickmode="array", tickvals=[1, 2, 3, 4], ticktext=list(SCENARIO_NAMES.values()))
+    fig_timeline.update_layout(margin=dict(l=20, r=20, t=50, b=30), legend_title_text="")
+    st.plotly_chart(fig_timeline, width="stretch")
+
+with tab_sensors:
+    default_sensors = ["Gas_AQI", "Temp_C", "Humidity_pct"]
+    selected_sensors = st.multiselect(
+        "Sensor channels",
+        SENSOR_COLUMNS,
+        default=[sensor for sensor in default_sensors if sensor in SENSOR_COLUMNS],
+    )
+    if selected_sensors:
+        st.plotly_chart(line_chart(df_filtered, selected_sensors, rolling_window), width="stretch")
     else:
-        default_metric = "oil_temperature" if "oil_temperature" in numeric_cols else numeric_cols[0]
-        metric_col = st.selectbox(
-            "Select metric",
-            options=numeric_cols,
-            index=numeric_cols.index(default_metric),
-            format_func=lambda c: f"{pretty_name(c)} ({c})",
-        )
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Mean", f"{df_filtered[metric_col].mean():.3f}")
-        m2.metric("Std", f"{df_filtered[metric_col].std():.3f}")
-        m3.metric("Min", f"{df_filtered[metric_col].min():.3f}")
-        m4.metric("Max", f"{df_filtered[metric_col].max():.3f}")
-        st.caption(column_description(metric_col))
+        st.info("Select at least one sensor channel.")
 
-        left, right = st.columns(2, gap="medium")
-        with left:
-            fig_hist = px.histogram(
-                df_filtered,
-                x=metric_col,
-                nbins=40,
-                title=f"Distribution - {pretty_name(metric_col)}",
-                color_discrete_sequence=[BRAND["secondary"]],
-                labels={metric_col: pretty_name(metric_col), "count": "Frequency"},
-            )
-            fig_hist.update_layout(xaxis_title=pretty_name(metric_col), yaxis_title="Frequency")
-            style_figure(fig_hist, height=380)
-            st.plotly_chart(fig_hist, width="stretch")
-        with right:
-            fig_ts = go.Figure()
-            fig_ts.add_trace(
-                go.Scatter(
-                    x=df_filtered.index,
-                    y=df_filtered[metric_col],
-                    mode="lines",
-                    name=f"{metric_col} raw",
-                    line={"color": BRAND["secondary"], "width": 1.3},
-                )
-            )
-            fig_ts.add_trace(
-                go.Scatter(
-                    x=df_filtered.index,
-                    y=df_filtered[metric_col].rolling(window=rolling_window).mean(),
-                    mode="lines",
-                    name=f"{metric_col} SMA({rolling_window})",
-                    line={"color": BRAND["accent"], "width": 2.2},
-                )
-            )
-            fig_ts.update_layout(title=f"Timeline - {pretty_name(metric_col)}")
-            fig_ts.update_yaxes(title=pretty_name(metric_col))
-            style_figure(fig_ts, height=380)
-            st.plotly_chart(fig_ts, width="stretch")
-        st.caption("Use this tab to define, summarize, and investigate any selected metric quickly.")
-        q10 = df_filtered[metric_col].quantile(0.10)
-        q90 = df_filtered[metric_col].quantile(0.90)
-        render_observations(
-            "Metric Observations",
-            [
-                f"Middle 80% expected range for `{metric_col}` is {q10:.3f} to {q90:.3f}.",
-                f"Current spread: min {df_filtered[metric_col].min():.3f}, max {df_filtered[metric_col].max():.3f}.",
-                "Use this page for fast definition, distribution check, and timeline behavior of any metric.",
-            ],
+    detail_left, detail_right = st.columns([1, 1], gap="large")
+    with detail_left:
+        fig_box = px.box(
+            df_filtered,
+            x="Scenario_Name",
+            y="Gas_AQI",
+            color="Scenario_Name",
+            color_discrete_map=SCENARIO_COLORS,
+            title="Gas AQI by Scenario",
         )
+        fig_box.update_layout(showlegend=False, height=390, margin=dict(l=20, r=20, t=50, b=80))
+        st.plotly_chart(fig_box, width="stretch")
+    with detail_right:
+        fig_motion = px.histogram(
+            df_filtered,
+            x="Hour",
+            color="Scenario_Name",
+            color_discrete_map=SCENARIO_COLORS,
+            nbins=24,
+            title="Hourly Scenario Density",
+        )
+        fig_motion.update_layout(height=390, margin=dict(l=20, r=20, t=50, b=40), legend_title_text="")
+        st.plotly_chart(fig_motion, width="stretch")
+
+with tab_intel:
+    projected, explained = pca_projection(df_filtered, SENSOR_COLUMNS)
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        fig_pca = px.scatter(
+            projected,
+            x="PC1",
+            y="PC2",
+            color="Scenario_Name",
+            color_discrete_map=SCENARIO_COLORS,
+            hover_data=["Timestamp"],
+            title=f"PCA State Map ({explained[0]:.1%}, {explained[1]:.1%})",
+        )
+        fig_pca.update_traces(marker=dict(size=5, opacity=0.65))
+        fig_pca.update_layout(height=450, margin=dict(l=20, r=20, t=50, b=40), legend_title_text="")
+        st.plotly_chart(fig_pca, width="stretch")
+    with right:
+        anomaly_energy = (
+            np.abs((df_filtered[SENSOR_COLUMNS] - df_filtered[SENSOR_COLUMNS].mean()) / df_filtered[SENSOR_COLUMNS].std(ddof=0))
+            .replace([np.inf, -np.inf], 0.0)
+            .fillna(0.0)
+            .max(axis=1)
+        )
+        energy_df = df_filtered.assign(Anomaly_Energy=anomaly_energy)
+        fig_energy = px.histogram(
+            energy_df,
+            x="Anomaly_Energy",
+            color="Scenario_Name",
+            color_discrete_map=SCENARIO_COLORS,
+            nbins=50,
+            title="ART-Style State Novelty Proxy",
+        )
+        fig_energy.update_layout(height=450, margin=dict(l=20, r=20, t=50, b=40), legend_title_text="")
+        st.plotly_chart(fig_energy, width="stretch")
+
+    intelligence_table = pd.DataFrame(
+        {
+            "Block": ["PCA", "ART", "RBF", "SOM", "Fuzzy", "GNN", "RL", "Genetic Algorithm"],
+            "Dataset Signal": [
+                "standardized sensor channels",
+                "state novelty from sensor energy",
+                "rolling trend features",
+                "scenario-state clusters",
+                "Hazard_Risk and Security_Risk",
+                "feature graph edge weights",
+                "Recommended_Action and RL_Baseline_Reward",
+                "threshold optimization targets",
+            ],
+            "Status": ["Ready"] * 8,
+        }
+    )
+    st.dataframe(intelligence_table, width="stretch", hide_index=True)
+
+with tab_graph:
+    corr = df_filtered[SENSOR_COLUMNS].corr()
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        fig_corr = px.imshow(
+            corr,
+            text_auto=".2f",
+            color_continuous_scale="RdBu_r",
+            zmin=-1,
+            zmax=1,
+            title="Sensor Correlation Matrix",
+        )
+        fig_corr.update_layout(height=430, margin=dict(l=20, r=20, t=50, b=30))
+        st.plotly_chart(fig_corr, width="stretch")
+    with right:
+        edges = strongest_edges(corr, limit=8)
+        st.plotly_chart(feature_graph_figure(edges, SENSOR_COLUMNS), width="stretch")
+    st.dataframe(edges, width="stretch", hide_index=True)
+
+with tab_policy:
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        fig_risk = px.line(
+            df_filtered,
+            x="Timestamp",
+            y=["Hazard_Risk", "Security_Risk", "Fuzzy_Risk"],
+            title="Fuzzy Risk Channels",
+        )
+        fig_risk.update_layout(height=420, margin=dict(l=20, r=20, t=50, b=40), legend_title_text="")
+        st.plotly_chart(fig_risk, width="stretch")
+    with right:
+        reward_by_action = (
+            df_filtered.groupby("Recommended_Action", as_index=False)["RL_Baseline_Reward"]
+            .mean()
+            .sort_values("RL_Baseline_Reward", ascending=False)
+        )
+        fig_reward = px.bar(
+            reward_by_action,
+            x="Recommended_Action",
+            y="RL_Baseline_Reward",
+            title="Baseline Reward by Action",
+        )
+        fig_reward.update_layout(height=420, margin=dict(l=20, r=20, t=50, b=80), xaxis_title="")
+        st.plotly_chart(fig_reward, width="stretch")
+
+    export_cols = [
+        "Timestamp",
+        "Temp_C",
+        "Humidity_pct",
+        "Gas_AQI",
+        "Light_Lux",
+        "Motion_Detected",
+        "Gas_Slope_30m",
+        "Motion_5m",
+        "Hazard_Risk",
+        "Security_Risk",
+        "Fuzzy_Risk",
+        "Recommended_Action",
+        "RL_Baseline_Reward",
+        "True_Scenario",
+        "Scenario_Name",
+    ]
+    st.dataframe(df_filtered[export_cols].head(500), width="stretch", height=360)

@@ -1,0 +1,7 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Generated processed datasets
+Phase 2 - Model Development/data/processed/
+Milestone 2 - Model Development/data/processed/
